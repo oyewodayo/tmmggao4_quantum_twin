@@ -1,0 +1,10 @@
+pulser>=1.8,<2.0
+pulser-simulation>=1.8,<2.0
+emu-mps>=2.7,<3.0
+numpy>=1.26
+matplotlib>=3.8
+scipy>=1.11
+jupyterlab>=4.0
+nbformat>=5.9
+nbconvert>=7.16
+ipykernel>=6.29
