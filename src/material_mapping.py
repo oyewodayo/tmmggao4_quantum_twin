@@ -384,3 +384,215 @@ def bulk_magnetisation(n: np.ndarray, is_bulk: Optional[np.ndarray] = None) -> f
     if is_bulk is not None:
         sz = sz[is_bulk]
     return float(np.mean(sz))
+
+
+# ---------------------------------------------------------------------------
+# 7. Structure factor S^zz(q) -- the paper's other critical-point diagnostic
+# ---------------------------------------------------------------------------
+#
+# Eq. used throughout the paper (Fig. 2d, Methods):
+#
+#   S^zz(q) = (1/N_b) * sum_{i,j in bulk} exp(i q.(r_i - r_j))
+#             * [ <sz_i sz_j> - <sz_i><sz_j> ]
+#
+# with q_{1/3} = (2*pi/3) * (1, sqrt(3)) the ordering wavevector of the
+# 1/3-filling phase on the triangular lattice (paper, main text).
+
+def q_one_third(r1: float) -> np.ndarray:
+    """Ordering wavevector q_1/3 = (2*pi/3)*(1, sqrt(3)) / r1 (paper's
+    convention has coordinates in units where r1=1; we keep r1 explicit
+    so `q . r` comes out dimensionless-radian directly)."""
+    return (2 * np.pi / 3.0) * np.array([1.0, np.sqrt(3.0)]) / r1
+
+
+def structure_factor(
+    q: np.ndarray,
+    coords: np.ndarray,
+    occupation: np.ndarray,
+    n_corr: np.ndarray,
+    bulk_idx: np.ndarray,
+) -> complex:
+    """Connected structure factor S^zz(q) restricted to the bulk index set.
+
+    IMPORTANT: `emu_mps.CorrelationMatrix` / `pulser.backend.CorrelationMatrix`
+    return correlations of the **Rydberg occupation operator**
+    `n_i = (1-sz_i)/2`, i.e. `n_corr[i,j] = <n_i n_j>` (with `n_corr[i,i] =
+    <n_i>`, not 1) -- *not* `<sz_i sz_j>`. Since `sz = 1 - 2n`, the connected
+    correlators are related by a clean identity:
+
+        <sz_i sz_j> - <sz_i><sz_j> = 4 * (<n_i n_j> - <n_i><n_j>)
+
+    so we take `occupation` (= <n_i>, e.g. straight from an `Occupation`
+    observable) and `n_corr` (= <n_i n_j>) as inputs and apply the
+    factor of 4 internally. Passing raw sz-values/correlations here would
+    silently give the wrong (and, as we found empirically, sign-flipped
+    and wrongly-scaled) answer.
+
+    Parameters
+    ----------
+    q : (2,) array
+    coords : (N,2) array, atom positions (um)
+    occupation : (N,) array, <n_i> (Rydberg occupation, e.g. from `Occupation`)
+    n_corr : (N,N) array, <n_i n_j> (e.g. from `CorrelationMatrix`)
+    bulk_idx : 1D int array, indices of bulk sites
+    """
+    Nb = len(bulk_idx)
+    total = 0.0 + 0.0j
+    for i in bulk_idx:
+        for j in bulk_idx:
+            phase = np.exp(1j * np.dot(q, coords[i] - coords[j]))
+            cov_n = n_corr[i, j] - occupation[i] * occupation[j]
+            total += phase * (4.0 * cov_n)
+    return total / Nb
+
+
+def all_pair_structure_factor(
+    q: np.ndarray, coords: np.ndarray, occupation: np.ndarray, n_corr: np.ndarray, bulk_idx: np.ndarray
+) -> float:
+    """Real part of `structure_factor` (S^zz(q) is real for a Hermitian,
+    translation-symmetric-on-average setup; small imaginary parts are
+    numerical/finite-size noise). See `structure_factor` docstring for the
+    critical n-vs-sz correlator distinction -- `occupation` and `n_corr`
+    here must both be in the occupation (n) basis, not sz.
+    """
+    return float(np.real(structure_factor(q, coords, occupation, n_corr, bulk_idx)))
+
+
+# ---------------------------------------------------------------------------
+# 8. Exact-diagonalization thermal reference (Phase 2b)
+# ---------------------------------------------------------------------------
+#
+# The paper compares post-quench QPU/MPS dynamics to a *thermal* QMC-SSE
+# ensemble at an effective temperature T fixed by energy conservation
+# (their Eq. 8):
+#
+#   <psi(0)| H_QPU |psi(0)> = Tr[H_QPU exp(-H_QPU/kT)] / Z
+#
+# For the small system sizes tractable with exact diagonalization
+# (N <~ 16-18 on a laptop), we can do *better* than QMC here: solve for
+# T exactly via full diagonalization, and evaluate the thermal
+# expectation value of any observable (e.g. C1^zz) exactly, with no
+# stochastic error. This is the right tool at this scale; swap in a
+# proper QMC-SSE sampler (Sandvik 2003) if/when you scale this approach
+# past N~20.
+
+def build_qpu_hamiltonian_dense(register: Register, device: VirtualDevice, Omega: float, delta: float):
+    """Dense many-body Hamiltonian matrix for H_QPU (Eq. 3), in the
+    Rydberg occupation basis, for exact diagonalization at small N.
+
+    H/hbar = sum_{i<j} U_ij n_i n_j + (Omega/2) sum_i sx_i - delta sum_i n_i
+
+    n_i = (1 - sz_i)/2 (Rydberg occupation), basis order matches
+    `register.qubits` iteration order. Returns a `qutip.Qobj`.
+    """
+    import qutip as qt
+
+    names = list(register.qubits.keys())
+    coords = np.array([register.qubits[n] for n in names], dtype=float)
+    N = len(names)
+    C6 = device.interaction_coeff
+
+    si = qt.qeye(2)
+    sx = qt.sigmax()
+    # n = (1 - sz)/2 in the {|g>=|0>, |r>=|1>} convention used by pulser
+    # (sigma^z|g> = +|g>, sigma^z|r> = -|r> -> n = |r><r| = (1-sz)/2)
+    n_op = (qt.qeye(2) - qt.sigmaz()) / 2.0
+
+    def embed(op, k):
+        ops = [si] * N
+        ops[k] = op
+        return qt.tensor(ops) # type: ignore
+
+    H = 0
+    for i in range(N):
+        H += (Omega / 2.0) * embed(sx, i)
+        H += -delta * embed(n_op, i)
+    for i in range(N):
+        for j in range(i + 1, N):
+            rij = np.linalg.norm(coords[i] - coords[j])
+            Uij = C6 / rij**6
+            H += Uij * embed(n_op, i) * embed(n_op, j)
+    return H
+
+
+def thermal_temperature_from_energy(H_dense, E_target: float, beta_bracket=(-50.0, 50.0)):
+    """Solve <H>_thermal(beta) = E_target for beta = 1/T (rad/us units),
+    by full diagonalization + bisection on beta directly (mean energy is
+    a monotonically decreasing function of beta for any bounded
+    spectrum, so this is robust -- including to *negative* effective
+    temperatures, which the paper explicitly finds for quenches into the
+    1/3-ordered phase, Eq. 8 and the discussion around
+    kT/(hbar J1) = -1.25 at Delta_z/J1 = 1.8).
+
+    Returns T = 1/beta (rad/us). A large |T| near the bracket edge means
+    the true solution is outside the bracket -- widen `beta_bracket`.
+    """
+    evals, evecs = H_dense.eigenstates()
+    evals = np.array(evals)
+    e_min, e_max = evals.min(), evals.max()
+
+    def mean_energy(beta):
+        # numerically stable: shift by min for beta>=0 (low-E states dominate),
+        # by max for beta<0 (high-E states dominate) -- keeps exponents <= 0.
+        ref = e_min if beta >= 0 else e_max
+        w = np.exp(-beta * (evals - ref))
+        w /= w.sum()
+        return float(np.sum(w * evals))
+
+    lo, hi = beta_bracket  # mean_energy(lo) >= mean_energy(hi) since decreasing in beta
+    e_lo, e_hi = mean_energy(lo), mean_energy(hi)
+    if not (e_hi <= E_target <= e_lo):
+        return None  # unreachable even with a negative-temperature ensemble in this bracket
+    for _ in range(80):
+        mid = 0.5 * (lo + hi)
+        e_mid = mean_energy(mid)
+        if e_mid >= E_target:
+            lo = mid
+        else:
+            hi = mid
+    beta = 0.5 * (lo + hi)
+    return 1.0 / beta if beta != 0 else np.inf
+
+
+def thermal_expectation(H_dense, T: float, obs):
+    """<obs>_thermal at temperature T (rad/us units, may be negative) via
+    full diagonalization. `T = np.inf` is handled as the infinite-T
+    (beta=0, maximally mixed) ensemble.
+    """
+    evals, evecs = H_dense.eigenstates()
+    evals = np.array(evals)
+    beta = 0.0 if np.isinf(T) else 1.0 / T
+    ref = evals.min() if beta >= 0 else evals.max()
+    w = np.exp(-beta * (evals - ref))
+    w /= w.sum()
+    val = 0.0
+    for wk, vk in zip(w, evecs):
+        val += wk * qt_expect(obs, vk)
+    return float(np.real(val))
+
+
+def qt_expect(obs, state):
+    import qutip as qt
+
+    return qt.expect(obs, state)
+
+
+def nn_correlator_operator(register: Register, device: VirtualDevice, bonds):
+    """sum_{<i,j> in bonds} sz_i sz_j / len(bonds), as a qutip.Qobj, for
+    use with `thermal_expectation`."""
+    import qutip as qt
+
+    names = list(register.qubits.keys())
+    N = len(names)
+    si = qt.qeye(2)
+    sz = qt.sigmaz()
+
+    def embed(op, k):
+        ops = [si] * N
+        ops[k] = op
+        return qt.tensor(ops) # type: ignore
+
+    op = 0
+    for i, j in bonds:
+        op += embed(sz, i) * embed(sz, j)
+    return op / len(bonds)
