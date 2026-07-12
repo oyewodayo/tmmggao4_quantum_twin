@@ -1,0 +1,12 @@
+# Secrets - never commit real credentials
+credentials.example.yaml
+credentials.yaml
+*.credentials.yaml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/

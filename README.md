@@ -13,12 +13,11 @@ figures, or re-run everything yourself.
 
 ## Layout
 
+Each notebook is standalone: it contains the device/register builders,
+the TmMgGaO4 <-> Rydberg Hamiltonian mapping, pulse sequence builders,
+and observable helpers it needs.
+
 ```
-src/material_mapping.py   -- all physics: device/register builders,
-                              the TmMgGaO4 <-> Rydberg Hamiltonian
-                              mapping (Eq. 1/3/4 of the paper), pulse
-                              sequence builders for all three phases,
-                              and observable helpers.
 notebooks/
   01_phase1_afm_prep.ipynb              -- Scholl et al. AFM warm-up
   02_phase2a_material_twin.ipynb        -- TmMgGaO4 magnetisation curve
@@ -41,8 +40,8 @@ before you burn GPU time.
 
 ## Scaling up on a GPU
 
-This is where the real hackathon points live. The knobs to turn, all
-exposed as plain function arguments in `src/material_mapping.py`:
+This is where the real hackathon points live. The knobs to turn are
+exposed as plain function arguments inside each standalone notebook:
 
 | Knob | Where | Small demo | Paper-scale target |
 |---|---|---|---|
