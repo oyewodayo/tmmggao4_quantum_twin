@@ -92,10 +92,6 @@ the compute happens on Pasqal's infrastructure once you submit.
   Hamiltonian (Sandvik, Phys. Rev. E 68, 056701 (2003)) — a good
   "further work" callout, out of scope for a hackathon-time
   implementation.
-* **AFM structure factor** for Phase 1 (currently we only compute
-  staggered magnetisation): one line via
-  `pulser.backend.CorrelationMatrix`, following the same pattern used
-  for `C1^zz` in notebook 3.
 * **Field-dependence of the classical breakdown** (Phase 2b Part B):
   the divergence-vs-field sweep does not cleanly peak near the
   expected transition (`Delta_z/J1 ~ 3.9`); notebook 3 documents this
