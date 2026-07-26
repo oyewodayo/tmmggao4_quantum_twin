@@ -4,12 +4,15 @@ Working implementation of the full challenge pipeline: warm-up AFM state
 preparation (Phase 1), a Rydberg-array "quantum twin" of the frustrated
 triangular magnet TmMgGaO₄ reproducing Fig. 1 of Leclerc et al.
 (arXiv:2603.20372) (Phase 2a), and an open-exploration gentle quench /
-thermalisation study (Phase 2b).
+thermalisation study that finds the classical-emulator breakdown point
+(Phase 2b).
 
 All three notebooks in `notebooks/` are **pre-executed** with real
-outputs from this codebase (small system sizes, chosen to run on a
-laptop CPU in under two minutes each) — open them to see the actual
-figures, or re-run everything yourself.
+outputs from this codebase — open them to see the actual figures. Some
+sections were run locally on CPU in under two minutes; others were run
+for real on **Pasqal Cloud** (see below) and their outputs are cached
+results from an actual quantum-emulator job, not something you get for
+free by just cloning the repo.
 
 ## Layout
 
@@ -21,9 +24,31 @@ and observable helpers it needs.
 notebooks/
   01_phase1_afm_prep.ipynb              -- Scholl et al. AFM warm-up
   02_phase2a_material_twin.ipynb        -- TmMgGaO4 magnetisation curve
-  03_phase2b_quench_thermalization.ipynb -- gentle quench (open Phase 2b)
+  03_phase2b_quench_thermalization.ipynb -- gentle quench + classical-frontier sweep
+  material_data.csv                     -- digitised Fig. 1e AC-susceptibility overlay data
+blog/
+  medium_quantum_twin.md, linkedin_quantum_twin.md  -- writeup drafts
 requirements.txt
+credentials.example.yaml                -- template; copy to credentials.yaml and fill in
 ```
+
+## What's local vs. what needs Pasqal Cloud
+
+Not all of this runs for free on a laptop. Each notebook mixes a local,
+credential-free section with a Pasqal Cloud section:
+
+| Notebook | Local (CPU, no account needed) | Pasqal Cloud (needs real credentials) |
+|---|---|---|
+| `01_phase1_afm_prep` | Sections 1-4: exact `QutipBackendV2` emulation, `N=9` (3x3), plus an optional guarded `N=16` exact check | Section 5: `N=25` (5x5) on EmuMPS, `chi=50/100` |
+| `02_phase2a_material_twin` | none — the whole notebook is cloud-only | Whole notebook: full `N=49` (7x7) register on EmuMPS, `chi=50` main scan / `chi=100` convergence check, analysed over the central 5x5=25-site bulk |
+| `03_phase2b_quench_thermalization` | Part A: exact-diagonalisation thermal reference + local `emu_mps` quench, `N=9` | Part B: the paper's `N=49` register, quench sweep over `chi in {50,100,200,300}` — this is the section that finds the classical bond-dimension divergence |
+
+The local sections run in well under two minutes and are a good
+first sanity check. The cloud sections are where the headline results
+(the Fig. 1-style magnetisation curve, and the classical-frontier
+divergence) come from, and they were genuinely submitted to and run on
+Pasqal's EmuMPS backend — their outputs in the notebooks are real job
+results, cached so you don't need an account just to *read* the paper.
 
 ## Quickstart
 
@@ -33,42 +58,49 @@ pip install -r requirements.txt
 jupyter lab notebooks/
 ```
 
-Everything runs on CPU at the sizes shipped here (N=9 for Phase 1,
-N=25 for Phase 2a/2b). This is intentional so you can `git clone` and
-get a green run immediately, and so the physics/API usage is validated
-before you burn GPU time.
+To re-run the local sections, that's all you need. To re-run (or
+extend) the Pasqal Cloud sections:
 
-## Scaling up on a GPU
+```bash
+cp credentials.example.yaml credentials.yaml   # fill in your real account details
+```
 
-This is where the real hackathon points live. The knobs to turn are
-exposed as plain function arguments inside each standalone notebook:
+`credentials.yaml` is gitignored — never commit real credentials.
+Each notebook has a `SUBMIT_NEW_JOBS` (or `SUBMIT_SWEEP`) safety switch,
+off by default; flip it once to submit fresh jobs, wait for them to
+show `DONE` on the Pasqal dashboard, then flip it back and run the
+retrieval cells. Batch IDs are cached in the `*.json` files at the repo
+root so a notebook never resubmits jobs it already has results for.
 
-| Knob | Where | Small demo | Paper-scale target |
-|---|---|---|---|
-| Register size | `triangular_rhombus_register(l_bulk, r1, buffer_rows)` | `l_bulk=3, buffer_rows=1` (N=25) | `l_bulk=3, buffer_rows=2` (N=49, paper's smallest); `l_bulk=6/9` for N=100/169 |
-| Bond dimension | `emu_mps.MPSConfig(max_bond_dim=...)` | 12, 24 | 128, 256, ... — **always run at least 2 values and check convergence**, this is an explicit evaluation criterion |
-| Sweep duration | `t_rise, t_sweep, t_fall` in the sequence builders | ~1.5 μs | longer sweeps improve adiabaticity for bigger systems, at the cost of more MPS timesteps |
-| Post-quench hold time | `t_hold_over_J1` in notebook 3 | 3 | 10+ to see the classical-frontier bond-dimension blowup (Fig. 4/Ext. Dat. Fig. 6 of the paper) |
+## Scaling further
 
-`emu_mps.MPSConfig(num_gpus_to_use=1)` (or more) puts the TDVP solver on
-GPU — see the `emu-mps` docs for multi-GPU options.
+The knobs that matter for pushing past what's shipped here:
+
+| Knob | Where | Notes |
+|---|---|---|
+| Register size | `n_side` (01), fixed `L=7` (02), `l_bulk`/`buffer_rows` via `triangular_rhombus_register` (03 Part A) | 02 and 03-Part-B are already at the paper's `N=49`; growing further means a bigger `L`/`l_bulk` and a matching credentials-backed cloud run |
+| Bond dimension | `max_bond_dim` / `chi` args to `EmulationConfig` | 02 checks `chi=50` vs `100`; 03 Part B sweeps `{50,100,200,300}` — **always compare at least two values and check convergence**, this is an explicit evaluation criterion |
+| Sweep / hold duration | `t_rise, t_sweep, t_fall` (01, 02), `t_hold_over_J1` (03) | Longer sweeps improve adiabaticity; longer holds are what exposes the bond-dimension blowup in 03 Part B |
+
+`EmulationConfig`/cloud submissions don't expose a GPU flag directly —
+the compute happens on Pasqal's infrastructure once you submit.
 
 ## What's deliberately left as an exercise
 
-* **Experimental data overlay** (Phase 2a, Fig. 1e comparison): we do
-  not fabricate digitised values of the paper's AC-susceptibility curve.
-  Notebook 2 has a ready-made loader (`material_data.csv`) — digitise
-  the published figure yourself (e.g. WebPlotDigitizer) and drop the
-  file in to auto-overlay it.
-* **QMC-thermal comparison** (Phase 2b, Fig. 4c-style dashed lines):
-  needs a stochastic-series-expansion sampler for the Rydberg
+* **QMC-thermal comparison** (Phase 2b Part B, Fig. 4c-style dashed
+  lines): needs a stochastic-series-expansion sampler for the Rydberg
   Hamiltonian (Sandvik, Phys. Rev. E 68, 056701 (2003)) — a good
-  "further work" callout for your writeup, out of scope for a
-  hackathon-time implementation.
+  "further work" callout, out of scope for a hackathon-time
+  implementation.
 * **AFM structure factor** for Phase 1 (currently we only compute
   staggered magnetisation): one line via
   `pulser.backend.CorrelationMatrix`, following the same pattern used
   for `C1^zz` in notebook 3.
+* **Field-dependence of the classical breakdown** (Phase 2b Part B):
+  the divergence-vs-field sweep does not cleanly peak near the
+  expected transition (`Delta_z/J1 ~ 3.9`); notebook 3 documents this
+  honestly rather than papering over it, with finite-size recurrence
+  as the leading suspect.
 
 ## Key references
 
