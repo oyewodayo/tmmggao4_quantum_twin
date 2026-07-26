@@ -25,9 +25,7 @@ notebooks/
   01_phase1_afm_prep.ipynb              -- Scholl et al. AFM warm-up
   02_phase2a_material_twin.ipynb        -- TmMgGaO4 magnetisation curve
   03_phase2b_quench_thermalization.ipynb -- gentle quench + classical-frontier sweep
-  material_data.csv                     -- digitised Fig. 1e AC-susceptibility overlay data
-blog/
-  medium_quantum_twin.md, linkedin_quantum_twin.md  -- writeup drafts
+material_data.csv                       -- digitised Fig. 1e AC-susceptibility overlay data
 requirements.txt
 credentials.example.yaml                -- template; copy to credentials.yaml and fill in
 ```
@@ -40,8 +38,8 @@ credential-free section with a Pasqal Cloud section:
 | Notebook | Local (CPU, no account needed) | Pasqal Cloud (needs real credentials) |
 |---|---|---|
 | `01_phase1_afm_prep` | Sections 1-4: exact `QutipBackendV2` emulation, `N=9` (3x3), plus an optional guarded `N=16` exact check | Section 5: `N=25` (5x5) on EmuMPS, `chi=50/100` |
-| `02_phase2a_material_twin` | none — the whole notebook is cloud-only | Whole notebook: full `N=49` (7x7) register on EmuMPS, `chi=50` main scan / `chi=100` convergence check, analysed over the central 5x5=25-site bulk |
-| `03_phase2b_quench_thermalization` | Part A: exact-diagonalisation thermal reference + local `emu_mps` quench, `N=9` | Part B: the paper's `N=49` register, quench sweep over `chi in {50,100,200,300}` — this is the section that finds the classical bond-dimension divergence |
+| `02_phase2a_material_twin` | Sections 1-5: Hamiltonian mapping, triangular register construction, pulse design and visualisation — no credentials needed | Section 6 onward: full `N=49` (7x7) register on EmuMPS, `chi=50` main scan / `chi=100` convergence check, analysed over the central 5x5=25-site bulk — every figure and observable in the notebook depends on this |
+| `03_phase2b_quench_thermalization` | Part A, Sections 1-4: exact-diagonalisation thermal reference + local `emu_mps` quench, `N=9` | Part A, Section 5: a longer hold at `N=9` on Pasqal Cloud. Part B (entirely cloud): the paper's `N=49` register, quench sweep over `chi in {50,100,200,300}` — this is the section that finds the classical bond-dimension divergence |
 
 The local sections run in well under two minutes and are a good
 first sanity check. The cloud sections are where the headline results
@@ -71,6 +69,13 @@ off by default; flip it once to submit fresh jobs, wait for them to
 show `DONE` on the Pasqal dashboard, then flip it back and run the
 retrieval cells. Batch IDs are cached in the `*.json` files at the repo
 root so a notebook never resubmits jobs it already has results for.
+`phase1_cloud_batches.json` and `phase2_paper_pulse_batches.json` are
+checked in, so those retrieval cells re-run as-is. The Part B sweep in
+`03_phase2b_quench_thermalization` reads two further batch files
+(`phase2_quench_sweep2.json`, `phase2_quench_sweep3.json`) that aren't
+in this repo — that section's outputs are pre-executed and real, but
+re-running its retrieval cell from a fresh clone needs `SUBMIT_SWEEP`
+flipped to resubmit first.
 
 ## Scaling further
 
@@ -80,7 +85,7 @@ The knobs that matter for pushing past what's shipped here:
 |---|---|---|
 | Register size | `n_side` (01), fixed `L=7` (02), `l_bulk`/`buffer_rows` via `triangular_rhombus_register` (03 Part A) | 02 and 03-Part-B are already at the paper's `N=49`; growing further means a bigger `L`/`l_bulk` and a matching credentials-backed cloud run |
 | Bond dimension | `max_bond_dim` / `chi` args to `EmulationConfig` | 02 checks `chi=50` vs `100`; 03 Part B sweeps `{50,100,200,300}` — **always compare at least two values and check convergence**, this is an explicit evaluation criterion |
-| Sweep / hold duration | `t_rise, t_sweep, t_fall` (01, 02), `t_hold_over_J1` (03) | Longer sweeps improve adiabaticity; longer holds are what exposes the bond-dimension blowup in 03 Part B |
+| Sweep / hold duration | `t_rise, t_sweep, t_fall` (01); hardcoded ns durations inside `build_sequence` (02); `t_hold_over_J1` (03) | Longer sweeps improve adiabaticity; longer holds are what exposes the bond-dimension blowup in 03 Part B |
 
 `EmulationConfig`/cloud submissions don't expose a GPU flag directly —
 the compute happens on Pasqal's infrastructure once you submit.
