@@ -1,7 +1,5 @@
 # Secrets - never commit real credentials
-credentials.example.yaml
 credentials.yaml
-*.credentials.yaml
 
 # Python
 __pycache__/
